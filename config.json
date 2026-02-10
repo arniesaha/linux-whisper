@@ -1,0 +1,8 @@
+{
+  "hotkey": "<ctrl>+<alt>+space",
+  "model": "base.en",
+  "language": "en",
+  "input_method": "auto",
+  "sound_feedback": true,
+  "continuous_mode": false
+}
