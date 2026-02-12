@@ -1,5 +1,5 @@
 {
-  "hotkey": "<ctrl>+<alt>+space",
+  "hotkey": "<ctrl>+space",
   "model": "base.en",
   "language": "en",
   "input_method": "auto",

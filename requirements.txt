@@ -1,2 +1,2 @@
 RealtimeSTT>=0.3.0
-pynput>=1.7.0
+evdev>=1.6.0

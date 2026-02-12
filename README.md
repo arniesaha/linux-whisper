@@ -1,100 +1,77 @@
 # Linux Whisper Dictation
 
-A simple, local voice-to-text tool for Linux. Press a hotkey, speak, and it types what you said at your cursor.
+A local voice-to-text tool for Linux. Press a hotkey, speak, and it types what you said at your cursor — in any app (browser, editor, terminal, etc.).
+
+Works on both X11 and Wayland (including GNOME).
 
 ## Features
 
-- 🎤 Local transcription using Whisper (no cloud, no API keys)
-- ⌨️ Types directly at cursor (works in any app)
-- 🔊 Audio feedback for start/stop
-- ⚙️ Configurable hotkey and model size
-- 🐧 Supports X11 and Wayland
+- Local transcription using Whisper (no cloud, no API keys)
+- Types directly at cursor in any focused application
+- Works on Wayland (GNOME, KDE, Sway, Hyprland) and X11
+- Audio feedback for start/stop
+- Configurable hotkey and model size
+- Clipboard fallback if direct typing fails
+
+## Quick Start
+
+```bash
+git clone <repo-url> ~/dev/linux-whisper
+cd ~/dev/linux-whisper
+./install.sh    # Installs deps, sets up permissions
+# Log out and back in (required for input group)
+./run.sh        # Start dictating
+```
 
 ## Requirements
 
 ### System Dependencies
 
+The install script handles these automatically, but for reference:
+
 **Ubuntu/Debian:**
 ```bash
-sudo apt install python3-pip python3-venv portaudio19-dev ffmpeg
-# For X11:
-sudo apt install xdotool
-# For Wayland:
-sudo apt install ydotool
+sudo apt install python3-pip python3-venv portaudio19-dev ffmpeg ydotool wl-clipboard
 ```
 
-**Arch Linux:**
+### Permissions (handled by install.sh)
+
+Both hotkey detection (evdev) and text injection (ydotool) require kernel-level access:
+
+1. **input group** — your user must be in the `input` group
+2. **uinput device** — `/dev/uinput` must be accessible to the `input` group
+3. **ydotoold daemon** — must be running as a user service
+
 ```bash
-sudo pacman -S python python-pip portaudio ffmpeg
-# For X11:
-sudo pacman -S xdotool
-# For Wayland:
-sudo pacman -S ydotool
-```
-
-**Fedora:**
-```bash
-sudo dnf install python3-pip python3-devel portaudio-devel ffmpeg
-sudo dnf install xdotool  # X11
-sudo dnf install ydotool  # Wayland
-```
-
-### Wayland Note (ydotool)
-
-If using Wayland with ydotool, you need the daemon running:
-```bash
-# Start the daemon (needs to run in background)
-sudo ydotoold &
-
-# Or create a systemd service (recommended)
-sudo systemctl enable --now ydotool
-```
-
-You may also need to add your user to the `input` group:
-```bash
+# The install script does all of this, but manually:
 sudo usermod -aG input $USER
-# Log out and back in for this to take effect
-```
-
-## Installation
-
-```bash
-# Clone or copy the project
-cd ~/projects/linux-whisper  # or wherever you put it
-
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# Install Python dependencies
-pip install -r requirements.txt
+echo 'KERNEL=="uinput", MODE="0660", GROUP="input"' | sudo tee /etc/udev/rules.d/99-uinput.rules
+sudo udevadm control --reload-rules && sudo udevadm trigger
+systemctl --user enable --now ydotoold.service
+# Log out and back in
 ```
 
 ## Usage
 
 ```bash
-# Activate venv if not already
-source venv/bin/activate
-
-# Run the dictation tool
-python whisper_dictate.py
+./run.sh
 ```
 
-**First run will download the Whisper model (~150MB for base.en).**
+First run downloads the Whisper model (~150MB for base.en).
 
 ### Controls
 
-- **Ctrl+Alt+Space** (default): Toggle recording
-- Recording stops automatically when you stop speaking
-- Transcribed text is typed at your cursor
+- **Ctrl+Space** (default): Start recording
+- Recording stops automatically when you stop speaking (VAD)
+- Transcribed text is typed at your cursor in the focused app
 
 ## Configuration
 
-Edit `config.json` to customize:
+Edit `config.json`:
 
 ```json
 {
-  "hotkey": "<ctrl>+<alt>+space",
+  "hotkey": "<ctrl>+space",
   "model": "base.en",
   "language": "en",
   "input_method": "auto",
@@ -113,47 +90,65 @@ Edit `config.json` to customize:
 | `medium.en` | ~1.5GB | Slow | Excellent |
 | `large-v3` | ~3GB | Slowest | Best |
 
-For English-only, `.en` models are faster and often more accurate.
+### Input Methods
+
+| Method | X11 | Wayland (GNOME) | Wayland (wlroots) |
+|--------|-----|-----------------|-------------------|
+| `ydotool` | Yes | Yes | Yes |
+| `xdotool` | Yes | No | No |
+| `wtype` | No | No | Yes |
+| `clipboard` | Yes | Yes | Yes |
+
+`auto` picks the best method for your session. Falls back to clipboard paste if typing fails.
 
 ### Hotkey Format
 
-Examples:
-- `<ctrl>+<alt>+space`
-- `<ctrl>+<shift>+d`
-- `<super>+v`
+Examples: `<ctrl>+space`, `<ctrl>+<shift>+d`, `<super>+v`, `<alt>+<shift>+r`
 
-## One-Liner Install
+## How It Works
 
-```bash
-cd ~ && git clone https://your-repo/linux-whisper.git && cd linux-whisper && python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt && python whisper_dictate.py
-```
-
-Or if copying from NAS:
-```bash
-scp -r arnab@nas:/home/Arnab/clawd/projects/linux-whisper ~/projects/ && cd ~/projects/linux-whisper && python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt && python whisper_dictate.py
-```
+1. **Hotkey detection** via `python-evdev` — reads keyboard events at the kernel level (works on X11 and Wayland)
+2. **Audio capture** via RealtimeSTT — records until voice activity stops
+3. **Transcription** via faster-whisper — local Whisper model, no cloud
+4. **Text injection** via `ydotool` — types at cursor via uinput (kernel-level, below compositor)
+5. **Clipboard fallback** — if ydotool typing fails, copies to clipboard and pastes with Ctrl+V
 
 ## Troubleshooting
 
-### "No input method found"
-Install xdotool (X11) or ydotool (Wayland):
+### "No keyboard devices found"
+You need to be in the `input` group:
 ```bash
-# Check your session type
-echo $XDG_SESSION_TYPE
+sudo usermod -aG input $USER
+# Log out and back in
 ```
 
-### ydotool permission denied
-Make sure ydotoold daemon is running and you're in the input group.
+### ydotool "failed to open uinput device"
+The udev rule for `/dev/uinput` is missing or permissions aren't applied:
+```bash
+# Check current permissions
+ls -la /dev/uinput
+# Should be: crw-rw---- root input
+
+# If not, re-run install.sh or:
+echo 'KERNEL=="uinput", MODE="0660", GROUP="input"' | sudo tee /etc/udev/rules.d/99-uinput.rules
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+### ydotoold not running
+```bash
+systemctl --user status ydotoold
+systemctl --user start ydotoold
+```
 
 ### Audio not working
-Make sure you have a working microphone:
 ```bash
 arecord -l  # List audio devices
 ```
 
-### Hotkey not detected
-On Wayland, some hotkey listeners require additional permissions. Try running with sudo for testing, then set up proper permissions.
+## Architecture
+
+See [RESEARCH.md](RESEARCH.md) for detailed analysis of alternatives and design decisions.
 
 ## License
 
-MIT - do whatever you want with it.
+MIT
