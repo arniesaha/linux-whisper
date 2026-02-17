@@ -432,6 +432,12 @@ def parse_hotkey_evdev(hotkey_str, ecodes):
         elif len(part) == 1 and part.isdigit():
             trigger = getattr(ecodes, f'KEY_{part}', None)
 
+    # Support modifier-only hotkeys (e.g., just "alt")
+    # Convert the modifier keycodes into trigger keycodes with no modifiers required
+    if trigger is None and len(modifiers) == 1:
+        trigger = modifiers[0]  # frozenset of equivalent keycodes (e.g., LEFT_ALT, RIGHT_ALT)
+        modifiers = []
+
     return modifiers, trigger
 
 def find_keyboard_devices(evdev, ecodes):
@@ -462,6 +468,12 @@ def run_hotkey_listener(hotkey_str, callback):
     if trigger is None:
         print(f"[ERROR] Could not parse hotkey trigger key from: {hotkey_str}")
         sys.exit(1)
+
+    # Normalize trigger to a frozenset of keycodes for uniform handling
+    if isinstance(trigger, int):
+        trigger_keys = frozenset({trigger})
+    else:
+        trigger_keys = trigger  # already a frozenset from modifier-only hotkey
 
     keyboards, permission_denied = find_keyboard_devices(evdev, ecodes)
     if not keyboards:
@@ -521,7 +533,7 @@ def run_hotkey_listener(hotkey_str, callback):
                             pressed_keys.discard(event.code)
 
                         # Trigger on key-down of the trigger key
-                        if event.code == trigger and event.value == 1:
+                        if event.code in trigger_keys and event.value == 1:
                             all_mods = all(
                                 any(k in pressed_keys for k in mod_set)
                                 for mod_set in modifiers
