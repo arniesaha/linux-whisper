@@ -41,6 +41,7 @@ DEFAULT_CONFIG = {
     "input_method": "auto",       # auto, ydotool, xdotool, wtype, clipboard
     "sound_feedback": True,
     "continuous_mode": False,
+    "input_device_index": None,   # PyAudio device index, or null for default
 }
 
 def load_config():
@@ -290,7 +291,12 @@ class WhisperDictation:
         os.environ.setdefault("PULSE_PROP_media.role", "music")
 
         from RealtimeSTT import AudioToTextRecorder
-        self.recorder = AudioToTextRecorder(
+
+        self._custom_audio_thread = None
+        device_idx = config.get("input_device_index")
+        use_custom_capture = device_idx is not None
+
+        recorder_kwargs = dict(
             model=config["model"],
             language=config["language"],
             spinner=False,
@@ -304,12 +310,69 @@ class WhisperDictation:
             on_recording_start=self._on_recording_start,
             on_recording_stop=self._on_recording_stop,
         )
+        if use_custom_capture:
+            recorder_kwargs["use_microphone"] = False
+            print(f"[INIT] Using direct audio capture from device index: {device_idx}")
+        self.recorder = AudioToTextRecorder(**recorder_kwargs)
+
+        if use_custom_capture:
+            self._start_custom_audio_capture(device_idx)
 
         print(f"[READY] Model loaded. Press {config['hotkey']} to start dictating.")
 
         # Background watchdog to auto-reset stuck state
         self._watchdog = threading.Thread(target=self._watchdog_loop, daemon=True)
         self._watchdog.start()
+
+    def _start_custom_audio_capture(self, device_index):
+        """Start a background thread that captures audio directly from an ALSA
+        device (bypassing PipeWire's broken S32->S16 conversion) and feeds it
+        to the RealtimeSTT recorder."""
+        import pyaudio
+        import numpy as np
+
+        pa = pyaudio.PyAudio()
+        info = pa.get_device_info_by_index(device_index)
+        native_rate = int(info["defaultSampleRate"])
+        channels = min(int(info["maxInputChannels"]), 2)
+
+        # Try 32-bit first (needed for devices like Volt 2 that use 24-bit-in-32-bit),
+        # fall back to 16-bit
+        try:
+            stream = pa.open(
+                format=pyaudio.paInt32, channels=channels, rate=native_rate,
+                input=True, input_device_index=device_index, frames_per_buffer=1024,
+            )
+            sample_width = 4
+            dtype = np.int32
+            print(f"[INIT] Audio capture: {info['name']} @ {native_rate}Hz/{channels}ch/32bit")
+        except Exception:
+            stream = pa.open(
+                format=pyaudio.paInt16, channels=channels, rate=native_rate,
+                input=True, input_device_index=device_index, frames_per_buffer=1024,
+            )
+            sample_width = 2
+            dtype = np.int16
+            print(f"[INIT] Audio capture: {info['name']} @ {native_rate}Hz/{channels}ch/16bit")
+
+        def capture_loop():
+            while True:
+                try:
+                    data = stream.read(1024, exception_on_overflow=False)
+                    samples = np.frombuffer(data, dtype=dtype)
+                    # Stereo to mono
+                    if channels == 2:
+                        samples = samples.reshape(-1, 2)[:, 0]
+                    # Convert 32-bit to 16-bit (proper bit-shift for 24-in-32 format)
+                    if dtype == np.int32:
+                        samples = (samples >> 16).astype(np.int16)
+                    self.recorder.feed_audio(samples, original_sample_rate=native_rate)
+                except Exception as e:
+                    print(f"[WARN] Audio capture error: {e}")
+                    time.sleep(0.1)
+
+        self._custom_audio_thread = threading.Thread(target=capture_loop, daemon=True)
+        self._custom_audio_thread.start()
 
     def _on_recording_start(self):
         print("[REC] Recording...")
@@ -530,9 +593,35 @@ def run_hotkey_listener(hotkey_str, callback):
     pressed_keys = set()
     last_trigger = 0
 
+    def rescan_if_stale():
+        """Detect replaced/disappeared keyboards and rescan."""
+        nonlocal keyboards
+        stale = False
+        for dev in keyboards:
+            try:
+                if os.stat(dev.path).st_ino != os.fstat(dev.fd).st_ino:
+                    stale = True
+                    break
+            except (OSError, FileNotFoundError):
+                stale = True
+                break
+        if stale:
+            for dev in keyboards:
+                try: dev.close()
+                except Exception: pass
+            new_keyboards, _ = find_keyboard_devices(evdev, ecodes)
+            if new_keyboards:
+                new_names = ', '.join(d.name for d in new_keyboards)
+                print(f"[INIT] Re-listening on: {new_names}")
+                keyboards = new_keyboards
+                pressed_keys.clear()
+
     while True:
         try:
             r, _, _ = select.select(keyboards, [], [], 1.0)
+            if not r:
+                rescan_if_stale()
+                continue
             for dev in r:
                 try:
                     for event in dev.read():

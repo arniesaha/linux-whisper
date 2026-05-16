@@ -1,8 +1,9 @@
 {
-  "hotkey": "alt",
+  "hotkey": "ctrl+space",
   "model": "base.en",
   "language": "en",
   "input_method": "auto",
   "sound_feedback": true,
-  "continuous_mode": false
+  "continuous_mode": false,
+  "input_device_index": 4
 }
