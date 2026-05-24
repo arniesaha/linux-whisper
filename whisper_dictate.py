@@ -82,6 +82,22 @@ def detect_input_method():
 def _has_cmd(cmd):
     return subprocess.run(["which", cmd], capture_output=True).returncode == 0
 
+_MODIFIER_KEYCODES = (29, 97, 42, 54, 56, 100, 125, 126)  # L/R ctrl, shift, alt, meta
+
+def _release_modifiers_ydotool():
+    """Force-release every modifier so injected text isn't read as Ctrl/Alt/etc shortcuts.
+
+    Why: ydotool has no --clearmodifiers; if the user's hotkey (e.g. rctrl) is still
+    held when typing starts, every letter becomes a shortcut (Ctrl+T opens a tab, etc.).
+    """
+    try:
+        subprocess.run(
+            ["ydotool", "key"] + [f"{kc}:0" for kc in _MODIFIER_KEYCODES],
+            check=False, timeout=2,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
 def type_text(text, method=None):
     """Type text at cursor using the appropriate tool. Returns True on success."""
     if not text.strip():
@@ -90,6 +106,12 @@ def type_text(text, method=None):
     method = method or config.get("input_method", "auto")
     if method == "auto":
         method = detect_input_method()
+
+    # Give the user time to release the hotkey so it doesn't shortcut-modify the output,
+    # then explicitly release every modifier for good measure.
+    time.sleep(0.15)
+    if method in ("ydotool", "clipboard"):
+        _release_modifiers_ydotool()
 
     if method == "clipboard":
         return _type_via_clipboard(text)
