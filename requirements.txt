@@ -1,2 +1,4 @@
-RealtimeSTT>=0.3.0
+RealtimeSTT[faster-whisper]>=1.0.0
 evdev>=1.6.0
+onnxruntime>=1.20.0
+packaging>=23.0

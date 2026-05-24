@@ -1,9 +1,10 @@
 {
-  "hotkey": "ctrl+space",
-  "model": "base.en",
+  "hotkey": "rctrl",
+  "model": "small.en",
   "language": "en",
   "input_method": "auto",
   "sound_feedback": true,
   "continuous_mode": false,
-  "input_device_index": 4
+  "input_device_index": null,
+  "input_gain": 1.0
 }

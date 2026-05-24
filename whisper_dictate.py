@@ -42,6 +42,7 @@ DEFAULT_CONFIG = {
     "sound_feedback": True,
     "continuous_mode": False,
     "input_device_index": None,   # PyAudio device index, or null for default
+    "input_gain": 1.0,            # Software gain multiplier on captured audio (clamped to int16)
 }
 
 def load_config():
@@ -299,6 +300,8 @@ class WhisperDictation:
         recorder_kwargs = dict(
             model=config["model"],
             language=config["language"],
+            device="cpu",
+            compute_type="int8",
             spinner=False,
             sample_rate=16000,
             silero_sensitivity=0.4,
@@ -355,17 +358,22 @@ class WhisperDictation:
             dtype = np.int16
             print(f"[INIT] Audio capture: {info['name']} @ {native_rate}Hz/{channels}ch/16bit")
 
+        gain = float(config.get("input_gain", 1.0))
+        if gain != 1.0:
+            print(f"[INIT] Software input gain: {gain}x")
+
         def capture_loop():
             while True:
                 try:
                     data = stream.read(1024, exception_on_overflow=False)
                     samples = np.frombuffer(data, dtype=dtype)
-                    # Stereo to mono
                     if channels == 2:
                         samples = samples.reshape(-1, 2)[:, 0]
-                    # Convert 32-bit to 16-bit (proper bit-shift for 24-in-32 format)
                     if dtype == np.int32:
                         samples = (samples >> 16).astype(np.int16)
+                    if gain != 1.0:
+                        amplified = samples.astype(np.int32) * gain
+                        samples = np.clip(amplified, -32768, 32767).astype(np.int16)
                     self.recorder.feed_audio(samples, original_sample_rate=native_rate)
                 except Exception as e:
                     print(f"[WARN] Audio capture error: {e}")
@@ -460,8 +468,12 @@ def _init_evdev():
 _MODIFIER_NAMES = {
     'ctrl':    'KEY_LEFTCTRL KEY_RIGHTCTRL',
     '<ctrl>':  'KEY_LEFTCTRL KEY_RIGHTCTRL',
+    'lctrl':   'KEY_LEFTCTRL',
+    'rctrl':   'KEY_RIGHTCTRL',
     'alt':     'KEY_LEFTALT KEY_RIGHTALT',
     '<alt>':   'KEY_LEFTALT KEY_RIGHTALT',
+    'lalt':    'KEY_LEFTALT',
+    'ralt':    'KEY_RIGHTALT',
     'shift':   'KEY_LEFTSHIFT KEY_RIGHTSHIFT',
     '<shift>': 'KEY_LEFTSHIFT KEY_RIGHTSHIFT',
     'super':   'KEY_LEFTMETA KEY_RIGHTMETA',
